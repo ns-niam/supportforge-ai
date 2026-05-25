@@ -216,3 +216,27 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+# Project files
+uploads/
+qdrant_storage/
+
+# Node / Next.js
+node_modules/
+.next/
+out/
+
+# Python virtual envs
+.venv/
+backend/.venv/
+frontend/.venv/
+
+# Python caches
+backend/__pycache__/
+frontend/__pycache__/
+__pycache__/
+
+# Environment files
+.env
+.env.local
+backend/.env
+frontend/.env.local
