@@ -13,6 +13,8 @@ import os
 import re
 from pathlib import Path
 from dotenv import load_dotenv
+from typing import Dict, List, Optional
+from app.memory import conversation_memory
 
 env_path = Path(__file__).resolve().parent / ".env"
 load_dotenv(dotenv_path=env_path)
@@ -38,13 +40,23 @@ UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 documents_store: Dict[str, dict] = {}
 
 
+class SourceItem(BaseModel):
+    filename: str
+    chunk_index: int
+    score: float
+
+
 class ChatRequest(BaseModel):
     message: str = Field(..., min_length=1, max_length=2000)
+    session_id: Optional[str] = None
 
 
 class ChatResponse(BaseModel):
     reply: str
     status: str = "success"
+    provider: str = "none"
+    session_id: Optional[str] = None
+    sources: List[SourceItem] = Field(default_factory=list)
 
 
 def utc_now_iso() -> str:
@@ -153,36 +165,65 @@ def health_check():
     }
 
 
-@app.post("/api/chat")
+@app.post("/api/chat", response_model=ChatResponse)
 def chat(request: ChatRequest):
     try:
+        session = conversation_memory.get_or_create_session(request.session_id)
+
+        # Store the user message first, so the conversation memory stays useful
+        # even if the provider falls back or fails later.
+        conversation_memory.add_message(session.session_id, "user", request.message)
+
         relevant_chunks = search_documents(request.message, top_k=3)
 
-        context_text = "\n\n".join(
-            f"[{item['filename']} | chunk {item['chunk_index'] + 1}] {item['chunk']}"
-            for item in relevant_chunks
+        context_parts = []
+
+        memory_context = conversation_memory.build_context(session.session_id, limit=6)
+        if memory_context:
+            context_parts.append(memory_context)
+
+        if relevant_chunks:
+            documents_context = "\n\n".join(
+                f"[{item['filename']} | chunk {item['chunk_index'] + 1}] {item['chunk']}"
+                for item in relevant_chunks
+            )
+            context_parts.append(f"Document Context:\n{documents_context}")
+
+        combined_context = "\n\n".join(context_parts).strip()
+
+        result = generate_answer(request.message, combined_context)
+
+        conversation_memory.add_message(
+            session.session_id,
+            "assistant",
+            result["answer"],
         )
 
-        answer = generate_answer(request.message, context_text)
+        sources = [
+            SourceItem(
+                filename=item["filename"],
+                chunk_index=item["chunk_index"],
+                score=item["score"],
+            )
+            for item in relevant_chunks
+        ]
 
-        return {
-            "reply": answer,
-            "status": "success",
-            "sources": [
-                {
-                    "filename": item["filename"],
-                    "chunk_index": item["chunk_index"],
-                    "score": item["score"],
-                }
-                for item in relevant_chunks
-            ],
-        }
+        return ChatResponse(
+            reply=result["answer"],
+            status=result["status"],
+            provider=result["provider"],
+            session_id=session.session_id,
+            sources=sources,
+        )
 
     except Exception as error:
-        return {
-            "reply": f"Backend error: {str(error)}",
-            "status": "error",
-        }
+        return ChatResponse(
+            reply=f"Backend error: {str(error)}",
+            status="error",
+            provider="none",
+            session_id=request.session_id,
+            sources=[],
+        )
 
 @app.post("/api/upload")
 async def upload_file(file: UploadFile = File(...)):

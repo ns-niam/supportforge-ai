@@ -29,11 +29,12 @@ type HealthResponse = {
 };
 
 type ChatApiResponse = {
-  reply?: string;
+  reply?: string | { answer?: string; status?: string };
+  answer?: string;
   status?: string;
-  provider?: string;
   sources?: SourceItem[];
   details?: string;
+  session_id?: string;
 };
 
 type UploadApiResponse = {
@@ -50,6 +51,14 @@ type UploadApiResponse = {
 type DocumentsApiResponse = {
   count?: number;
   documents?: DocumentItem[];
+};
+
+const createSessionId = () => {
+  if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
+    return crypto.randomUUID();
+  }
+
+  return `session-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 };
 
 export default function Home() {
@@ -71,9 +80,9 @@ export default function Home() {
   const [documents, setDocuments] = useState<DocumentItem[]>([]);
   const [isLoadingDocuments, setIsLoadingDocuments] = useState(false);
 
-  const [lastProvider, setLastProvider] = useState("");
   const [lastSources, setLastSources] = useState<SourceItem[]>([]);
   const [lastUpdated, setLastUpdated] = useState<string>("");
+  const [sessionId, setSessionId] = useState("");
 
   const bottomRef = useRef<HTMLDivElement | null>(null);
 
@@ -88,15 +97,15 @@ export default function Home() {
         value: backendStatus.startsWith("online") ? "Online" : "Offline",
       },
       {
-        label: "Provider",
-        value: lastProvider || "—",
-      },
-      {
         label: "Sources",
         value: String(lastSources.length),
       },
+      {
+        label: "Session",
+        value: sessionId ? sessionId.slice(0, 8) : "—",
+      },
     ],
-    [backendStatus, documents.length, lastProvider, lastSources.length]
+    [backendStatus, documents.length, lastSources.length, sessionId]
   );
 
   const scrollToBottom = () => {
@@ -106,6 +115,19 @@ export default function Home() {
   useEffect(() => {
     scrollToBottom();
   }, [messages]);
+
+  useEffect(() => {
+    const existingSessionId =
+      window.localStorage.getItem("supportforge_session_id");
+
+    const nextSessionId = existingSessionId || createSessionId();
+
+    if (!existingSessionId) {
+      window.localStorage.setItem("supportforge_session_id", nextSessionId);
+    }
+
+    setSessionId(nextSessionId);
+  }, []);
 
   const loadDashboardData = async () => {
     setIsLoadingDocuments(true);
@@ -172,36 +194,42 @@ export default function Home() {
         },
         body: JSON.stringify({
           message: trimmed,
+          session_id: sessionId || undefined,
         }),
       });
 
-    const data = await response.json();
+      const data = (await response.json()) as ChatApiResponse;
 
-const replyText =
-  typeof data.reply === "string"
-    ? data.reply
-    : typeof data.answer === "string"
-      ? data.answer
-      : typeof data.reply?.answer === "string"
-        ? data.reply.answer
-        : "No response received.";
+      const responseSessionId =
+        typeof data.session_id === "string" ? data.session_id : "";
 
-const providerText =
-  typeof data.provider === "string"
-    ? data.provider
-    : typeof data.reply?.provider === "string"
-      ? data.reply.provider
-      : "";
+      if (responseSessionId) {
+        setSessionId(responseSessionId);
+        window.localStorage.setItem(
+          "supportforge_session_id",
+          responseSessionId
+        );
+      }
 
-const sourcesText = Array.isArray(data.sources) ? data.sources : [];
+      const replyText =
+        typeof data.reply === "string"
+          ? data.reply
+          : data.reply &&
+              typeof data.reply === "object" &&
+              typeof data.reply.answer === "string"
+            ? data.reply.answer
+            : typeof data.answer === "string"
+              ? data.answer
+              : "No response received.";
 
-const assistantMessage: Message = {
-       role: "assistant",
-       content: replyText,
+      const sourcesText = Array.isArray(data.sources) ? data.sources : [];
+
+      const assistantMessage: Message = {
+        role: "assistant",
+        content: replyText,
       };
 
       setMessages((prev) => [...prev, assistantMessage]);
-      setLastProvider(providerText);
       setLastSources(sourcesText);
       setLastUpdated(new Date().toLocaleString());
     } catch {
@@ -212,7 +240,6 @@ const assistantMessage: Message = {
           content: "Failed to connect to the backend.",
         },
       ]);
-      setLastProvider("");
       setLastSources([]);
     } finally {
       setIsSending(false);
@@ -237,7 +264,7 @@ const assistantMessage: Message = {
       const data = (await response.json()) as UploadApiResponse;
 
       if (!response.ok) {
-        throw new Error(data.details || data.status || "Upload failed");
+        throw new Error(data.details || data.message || data.status || "Upload failed");
       }
 
       setUploadStatus(
@@ -280,6 +307,11 @@ const assistantMessage: Message = {
             <div className="rounded-full border border-zinc-700 px-4 py-2 text-sm text-zinc-300">
               Updated {lastUpdated || "—"}
             </div>
+            {sessionId && (
+              <div className="rounded-full border border-zinc-700 px-4 py-2 text-sm text-zinc-300">
+                Session {sessionId.slice(0, 8)}
+              </div>
+            )}
           </div>
         </header>
 
@@ -417,34 +449,25 @@ const assistantMessage: Message = {
               <div ref={bottomRef} />
             </div>
 
-            {lastProvider && (
+            {lastSources.length > 0 && (
               <div className="border-t border-zinc-800 px-6 py-4">
                 <div className="rounded-2xl border border-zinc-800 bg-black p-4 text-sm text-zinc-300">
-                  <p>
-                    Response generated by:{" "}
-                    <span className="text-white">{lastProvider}</span>
-                  </p>
-
-                  {lastSources.length > 0 && (
-                    <div className="mt-4">
-                      <p className="mb-2 text-zinc-300">Sources:</p>
-                      <div className="space-y-2">
-                        {lastSources.map((source, index) => (
-                          <div
-                            key={index}
-                            className="rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2"
-                          >
-                            <span className="text-white">{source.filename}</span>
-                            <span className="text-zinc-500">
-                              {" "}
-                              · chunk {source.chunk_index + 1} · score{" "}
-                              {formatScore(source.score)}
-                            </span>
-                          </div>
-                        ))}
+                  <p className="mb-3 text-zinc-300">Document Sources</p>
+                  <div className="space-y-2">
+                    {lastSources.map((source, index) => (
+                      <div
+                        key={index}
+                        className="rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2"
+                      >
+                        <span className="text-white">{source.filename}</span>
+                        <span className="text-zinc-500">
+                          {" "}
+                          · chunk {source.chunk_index + 1} · score{" "}
+                          {formatScore(source.score)}
+                        </span>
                       </div>
-                    </div>
-                  )}
+                    ))}
+                  </div>
                 </div>
               </div>
             )}
@@ -490,8 +513,9 @@ const assistantMessage: Message = {
                 <li>PDF upload and extraction</li>
                 <li>Document chunking for RAG</li>
                 <li>Vector retrieval system</li>
-                <li>Multi-provider LLM fallback</li>
+                <li>Multi-provider fallback routing</li>
                 <li>Source-aware chat responses</li>
+                <li>Session memory</li>
                 <li>Backend API integration</li>
               </ul>
             </div>
@@ -503,20 +527,10 @@ const assistantMessage: Message = {
                 <li>Tailwind CSS</li>
                 <li>FastAPI</li>
                 <li>Qdrant Vector DB</li>
-                <li>Sentence Transformers</li>
-                <li>Ollama / Gemini / Groq</li>
+                <li>Sentence Embeddings</li>
+                <li>Multi-provider AI routing</li>
               </ul>
             </div>
-
-            {/* Future upgrade: conversation memory
-            <div className="rounded-3xl border border-zinc-800 bg-zinc-950 p-6">
-              <h3 className="text-lg font-semibold">Memory</h3>
-              <p className="mt-3 text-sm leading-6 text-zinc-400">
-                Later we can add session memory, follow-up question context,
-                and user workspace history.
-              </p>
-            </div>
-            */}
 
             {/* Future upgrade: streaming response UI
             <div className="rounded-3xl border border-zinc-800 bg-zinc-950 p-6">
@@ -533,6 +547,16 @@ const assistantMessage: Message = {
               <p className="mt-3 text-sm leading-6 text-zinc-400">
                 Later we can add login, team workspaces, document permissions,
                 and analytics dashboard.
+              </p>
+            </div>
+            */}
+
+            {/* Future upgrade: memory persistence
+            <div className="rounded-3xl border border-zinc-800 bg-zinc-950 p-6">
+              <h3 className="text-lg font-semibold">Persistent Memory</h3>
+              <p className="mt-3 text-sm leading-6 text-zinc-400">
+                Later we can move session memory into Redis or PostgreSQL so it
+                survives restarts.
               </p>
             </div>
             */}
