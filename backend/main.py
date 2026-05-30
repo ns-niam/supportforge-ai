@@ -1,5 +1,6 @@
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from app.llm import generate_answer
 from pydantic import BaseModel, Field
 from pypdf import PdfReader
 from app.vector_store import add_document, search_documents
@@ -10,7 +11,11 @@ from datetime import datetime, timezone
 import shutil
 import os
 import re
+from pathlib import Path
+from dotenv import load_dotenv
 
+env_path = Path(__file__).resolve().parent / ".env"
+load_dotenv(dotenv_path=env_path)
 
 app = FastAPI(
     title="SupportForge AI",
@@ -151,32 +156,26 @@ def health_check():
 @app.post("/api/chat")
 def chat(request: ChatRequest):
     try:
-        relevant_chunks = search_documents(
-            request.message,
-            top_k=3,
+        relevant_chunks = search_documents(request.message, top_k=3)
+
+        context_text = "\n\n".join(
+            f"[{item['filename']} | chunk {item['chunk_index'] + 1}] {item['chunk']}"
+            for item in relevant_chunks
         )
 
-        if relevant_chunks:
-            context_text = "\n\n".join(
-                f"[{item['filename']} | chunk {item['chunk_index'] + 1}] {item['chunk']}"
-                for item in relevant_chunks
-            )
-
-            reply = (
-                "I found relevant document content:\n\n"
-                f"{context_text}\n\n"
-                "Next step: connect this to an AI model for better answers."
-            )
-
-        else:
-            reply = (
-                f"You said: {request.message}\n\n"
-                "No relevant document context was found."
-            )
+        answer = generate_answer(request.message, context_text)
 
         return {
-            "reply": reply,
+            "reply": answer,
             "status": "success",
+            "sources": [
+                {
+                    "filename": item["filename"],
+                    "chunk_index": item["chunk_index"],
+                    "score": item["score"],
+                }
+                for item in relevant_chunks
+            ],
         }
 
     except Exception as error:
