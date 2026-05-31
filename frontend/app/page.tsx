@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 
+// Section: Types
 type Message = {
   id: string;
   role: "user" | "assistant";
@@ -55,6 +56,16 @@ type DocumentsApiResponse = {
   documents?: DocumentItem[];
 };
 
+// Section: Constants
+const WELCOME_MESSAGE: Message = {
+  id: "welcome-message",
+  role: "assistant",
+  content:
+    "Welcome to SupportForge AI. Upload a PDF or ask a question to get started.",
+  createdAt: 0,
+};
+
+// Section: Helper Utilities
 const createMessageId = () => {
   if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
     return crypto.randomUUID();
@@ -78,7 +89,7 @@ const formatMessageTime = (timestamp: number) => {
   }).format(new Date(timestamp));
 };
 
-const renderPrettyMessage = (content: string) => {
+const renderPrettyMessage = (content: string, isUser: boolean) => {
   const sections = content
     .split(/\n{2,}/)
     .map((part) => part.trim())
@@ -92,7 +103,8 @@ const renderPrettyMessage = (content: string) => {
           .map((line) => line.trim())
           .filter(Boolean);
 
-        const isBulletList = lines.length > 1 && lines.every((line) => /^([-*•]|\d+\.)\s+/.test(line));
+        const isBulletList =
+          lines.length > 1 && lines.every((line) => /^([-*•]|\d+\.)\s+/.test(line));
 
         if (isBulletList) {
           return (
@@ -103,9 +115,15 @@ const renderPrettyMessage = (content: string) => {
                 return (
                   <li
                     key={lineIndex}
-                    className="flex gap-2 text-[15px] leading-7 text-zinc-100"
+                    className={`flex gap-2 text-[15px] leading-7 ${
+                      isUser ? "text-black" : "text-zinc-100"
+                    }`}
                   >
-                    <span className="mt-2 h-1.5 w-1.5 flex-none rounded-full bg-current opacity-70" />
+                    <span
+                      className={`mt-2 h-1.5 w-1.5 flex-none rounded-full ${
+                        isUser ? "bg-black/70" : "bg-current opacity-70"
+                      }`}
+                    />
                     <span className="whitespace-pre-wrap break-words">
                       {cleanedLine}
                     </span>
@@ -122,7 +140,11 @@ const renderPrettyMessage = (content: string) => {
           return (
             <div
               key={sectionIndex}
-              className="rounded-2xl border border-zinc-700/60 bg-black/20 px-4 py-3 text-[15px] leading-7 text-zinc-100"
+              className={`rounded-2xl border px-4 py-3 text-[15px] leading-7 ${
+                isUser
+                  ? "border-black/10 bg-black/5 text-black"
+                  : "border-zinc-700/60 bg-black/20 text-zinc-100"
+              }`}
             >
               <span className="whitespace-pre-wrap break-words">
                 {lines[0].replace(/^>\s?/, "")}
@@ -134,7 +156,9 @@ const renderPrettyMessage = (content: string) => {
         return (
           <p
             key={sectionIndex}
-            className="whitespace-pre-wrap break-words text-[15px] leading-7 text-zinc-100"
+            className={`whitespace-pre-wrap break-words text-[15px] leading-7 ${
+              isUser ? "text-black" : "text-zinc-100"
+            }`}
           >
             {section}
           </p>
@@ -144,17 +168,12 @@ const renderPrettyMessage = (content: string) => {
   );
 };
 
+// Section: Main Component
 export default function Home() {
+  const [mounted, setMounted] = useState(false);
+
   const [message, setMessage] = useState("");
-  const [messages, setMessages] = useState<Message[]>([
-    {
-      id: createMessageId(),
-      role: "assistant",
-      content:
-        "Welcome to SupportForge AI. Upload a PDF or ask a question to get started.",
-      createdAt: Date.now(),
-    },
-  ]);
+  const [messages, setMessages] = useState<Message[]>([WELCOME_MESSAGE]);
 
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [uploadStatus, setUploadStatus] = useState("");
@@ -197,10 +216,17 @@ export default function Home() {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   };
 
+  // Section: Hydration Guard
+  useEffect(() => {
+    setMounted(true);
+  }, []);
+
+  // Section: Auto Scroll on New Messages
   useEffect(() => {
     scrollToBottom();
   }, [messages]);
 
+  // Section: Session Bootstrap
   useEffect(() => {
     const existingSessionId =
       window.localStorage.getItem("supportforge_session_id");
@@ -214,6 +240,7 @@ export default function Home() {
     setSessionId(nextSessionId);
   }, []);
 
+  // Section: Dashboard Loader
   const loadDashboardData = async () => {
     setIsLoadingDocuments(true);
 
@@ -247,6 +274,7 @@ export default function Home() {
     }
   };
 
+  // Section: Initial Load + Refresh Interval
   useEffect(() => {
     void loadDashboardData();
 
@@ -257,6 +285,7 @@ export default function Home() {
     return () => window.clearInterval(interval);
   }, []);
 
+  // Section: Chat Handler
   const handleSendMessage = async () => {
     const trimmed = message.trim();
 
@@ -337,6 +366,7 @@ export default function Home() {
     }
   };
 
+  // Section: Upload Handler
   const handleUpload = async () => {
     if (!selectedFile || isUploading) return;
 
@@ -355,11 +385,15 @@ export default function Home() {
       const data = (await response.json()) as UploadApiResponse;
 
       if (!response.ok) {
-        throw new Error(data.details || data.message || data.status || "Upload failed");
+        throw new Error(
+          data.details || data.message || data.status || "Upload failed"
+        );
       }
 
       setUploadStatus(
-        `Uploaded: ${data.filename || selectedFile.name} | Chunks: ${data.total_chunks || 0}`
+        `Uploaded: ${data.filename || selectedFile.name} | Chunks: ${
+          data.total_chunks || 0
+        }`
       );
 
       setSelectedFile(null);
@@ -373,11 +407,13 @@ export default function Home() {
     }
   };
 
+  // Section: Formatting Helpers
   const formatScore = (score: number) => score.toFixed(3);
 
   return (
     <main className="min-h-screen bg-black text-white">
       <div className="mx-auto flex min-h-screen max-w-7xl flex-col px-6 py-6">
+        {/* Section: Top Header */}
         <header className="mb-6 flex flex-col gap-4 border-b border-zinc-800 pb-5 sm:flex-row sm:items-center sm:justify-between">
           <div>
             <h1 className="text-2xl font-bold tracking-tight">
@@ -407,6 +443,7 @@ export default function Home() {
         </header>
 
         <div className="grid flex-1 gap-6 lg:grid-cols-[300px_1fr_320px]">
+          {/* Section: Left Sidebar */}
           <aside className="space-y-6">
             <div className="rounded-3xl border border-zinc-800 bg-zinc-950 p-5">
               <h2 className="text-lg font-semibold">Quick Actions</h2>
@@ -516,6 +553,7 @@ export default function Home() {
             </div>
           </aside>
 
+          {/* Section: Center Chat Panel */}
           <section className="flex flex-col rounded-3xl border border-zinc-800 bg-zinc-950">
             <div className="border-b border-zinc-800 px-6 py-4">
               <h2 className="text-lg font-semibold">AI Chat</h2>
@@ -557,11 +595,12 @@ export default function Home() {
                         </div>
 
                         <span
+                          suppressHydrationWarning
                           className={`text-[11px] ${
                             isUser ? "text-zinc-600" : "text-zinc-500"
                           }`}
                         >
-                          {formatMessageTime(msg.createdAt)}
+                          {mounted ? formatMessageTime(msg.createdAt) : ""}
                         </span>
                       </div>
 
@@ -570,7 +609,7 @@ export default function Home() {
                           isUser ? "text-black" : "text-zinc-100"
                         }`}
                       >
-                        {renderPrettyMessage(msg.content)}
+                        {renderPrettyMessage(msg.content, isUser)}
                       </div>
 
                       <div
@@ -645,6 +684,7 @@ export default function Home() {
             </div>
           </section>
 
+          {/* Section: Right Info Panel */}
           <aside className="space-y-6">
             <div className="rounded-3xl border border-zinc-800 bg-zinc-950 p-6">
               <h3 className="text-lg font-semibold">Project Overview</h3>
