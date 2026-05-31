@@ -3,8 +3,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 
 type Message = {
+  id: string;
   role: "user" | "assistant";
   content: string;
+  createdAt: number;
 };
 
 type SourceItem = {
@@ -53,6 +55,14 @@ type DocumentsApiResponse = {
   documents?: DocumentItem[];
 };
 
+const createMessageId = () => {
+  if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
+    return crypto.randomUUID();
+  }
+
+  return `msg-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+};
+
 const createSessionId = () => {
   if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
     return crypto.randomUUID();
@@ -61,13 +71,88 @@ const createSessionId = () => {
   return `session-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 };
 
+const formatMessageTime = (timestamp: number) => {
+  return new Intl.DateTimeFormat("en-US", {
+    hour: "numeric",
+    minute: "2-digit",
+  }).format(new Date(timestamp));
+};
+
+const renderPrettyMessage = (content: string) => {
+  const sections = content
+    .split(/\n{2,}/)
+    .map((part) => part.trim())
+    .filter(Boolean);
+
+  return (
+    <div className="space-y-3">
+      {sections.map((section, sectionIndex) => {
+        const lines = section
+          .split("\n")
+          .map((line) => line.trim())
+          .filter(Boolean);
+
+        const isBulletList = lines.length > 1 && lines.every((line) => /^([-*•]|\d+\.)\s+/.test(line));
+
+        if (isBulletList) {
+          return (
+            <ul key={sectionIndex} className="space-y-2">
+              {lines.map((line, lineIndex) => {
+                const cleanedLine = line.replace(/^([-*•]|\d+\.)\s+/, "");
+
+                return (
+                  <li
+                    key={lineIndex}
+                    className="flex gap-2 text-[15px] leading-7 text-zinc-100"
+                  >
+                    <span className="mt-2 h-1.5 w-1.5 flex-none rounded-full bg-current opacity-70" />
+                    <span className="whitespace-pre-wrap break-words">
+                      {cleanedLine}
+                    </span>
+                  </li>
+                );
+              })}
+            </ul>
+          );
+        }
+
+        const isQuotedBlock = lines.length === 1 && lines[0].startsWith(">");
+
+        if (isQuotedBlock) {
+          return (
+            <div
+              key={sectionIndex}
+              className="rounded-2xl border border-zinc-700/60 bg-black/20 px-4 py-3 text-[15px] leading-7 text-zinc-100"
+            >
+              <span className="whitespace-pre-wrap break-words">
+                {lines[0].replace(/^>\s?/, "")}
+              </span>
+            </div>
+          );
+        }
+
+        return (
+          <p
+            key={sectionIndex}
+            className="whitespace-pre-wrap break-words text-[15px] leading-7 text-zinc-100"
+          >
+            {section}
+          </p>
+        );
+      })}
+    </div>
+  );
+};
+
 export default function Home() {
   const [message, setMessage] = useState("");
   const [messages, setMessages] = useState<Message[]>([
     {
+      id: createMessageId(),
       role: "assistant",
       content:
         "Welcome to SupportForge AI. Upload a PDF or ask a question to get started.",
+      createdAt: Date.now(),
     },
   ]);
 
@@ -178,8 +263,10 @@ export default function Home() {
     if (!trimmed || isSending) return;
 
     const userMessage: Message = {
+      id: createMessageId(),
       role: "user",
       content: trimmed,
+      createdAt: Date.now(),
     };
 
     setMessages((prev) => [...prev, userMessage]);
@@ -225,8 +312,10 @@ export default function Home() {
       const sourcesText = Array.isArray(data.sources) ? data.sources : [];
 
       const assistantMessage: Message = {
+        id: createMessageId(),
         role: "assistant",
         content: replyText,
+        createdAt: Date.now(),
       };
 
       setMessages((prev) => [...prev, assistantMessage]);
@@ -236,8 +325,10 @@ export default function Home() {
       setMessages((prev) => [
         ...prev,
         {
+          id: createMessageId(),
           role: "assistant",
           content: "Failed to connect to the backend.",
+          createdAt: Date.now(),
         },
       ]);
       setLastSources([]);
@@ -336,7 +427,7 @@ export default function Home() {
                   <button
                     onClick={handleUpload}
                     disabled={!selectedFile || isUploading}
-                    className="mt-4 w-full rounded-2xl bg-white px-4 py-3 text-sm font-semibold text-black disabled:cursor-not-allowed disabled:opacity-50"
+                    className="mt-4 w-full rounded-2xl bg-white px-4 py-3 text-sm font-semibold text-black transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     {isUploading ? "Uploading..." : "Upload Document"}
                   </button>
@@ -367,7 +458,7 @@ export default function Home() {
 
                   <button
                     onClick={loadDashboardData}
-                    className="mt-4 w-full rounded-2xl border border-zinc-700 bg-zinc-950 px-4 py-2 text-sm text-zinc-200 hover:bg-zinc-900"
+                    className="mt-4 w-full rounded-2xl border border-zinc-700 bg-zinc-950 px-4 py-2 text-sm text-zinc-200 transition hover:bg-zinc-900"
                   >
                     Refresh status
                   </button>
@@ -434,18 +525,75 @@ export default function Home() {
             </div>
 
             <div className="flex-1 space-y-4 overflow-y-auto px-6 py-5">
-              {messages.map((msg, index) => (
-                <div
-                  key={index}
-                  className={`max-w-[85%] rounded-2xl px-4 py-3 text-sm leading-relaxed ${
-                    msg.role === "user"
-                      ? "ml-auto bg-white text-black"
-                      : "bg-zinc-800 text-white"
-                  }`}
-                >
-                  {msg.content}
+              {messages.map((msg) => {
+                const isUser = msg.role === "user";
+
+                return (
+                  <div
+                    key={msg.id}
+                    className={`flex w-full ${isUser ? "justify-end" : "justify-start"}`}
+                  >
+                    <div
+                      className={`group relative max-w-[88%] rounded-[1.6rem] border px-4 py-3 shadow-2xl shadow-black/20 transition-all duration-300 ${
+                        isUser
+                          ? "rounded-br-md border-white/10 bg-gradient-to-br from-white to-zinc-100 text-black"
+                          : "rounded-bl-md border-zinc-700/70 bg-gradient-to-br from-zinc-900 to-zinc-950 text-white"
+                      }`}
+                    >
+                      <div className="mb-3 flex items-center justify-between gap-4">
+                        <div
+                          className={`inline-flex items-center gap-2 rounded-full px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] ${
+                            isUser
+                              ? "bg-black/5 text-zinc-700"
+                              : "bg-white/5 text-zinc-300"
+                          }`}
+                        >
+                          <span
+                            className={`h-2 w-2 rounded-full ${
+                              isUser ? "bg-black/70" : "bg-emerald-400"
+                            }`}
+                          />
+                          <span>{isUser ? "You" : "Assistant"}</span>
+                        </div>
+
+                        <span
+                          className={`text-[11px] ${
+                            isUser ? "text-zinc-600" : "text-zinc-500"
+                          }`}
+                        >
+                          {formatMessageTime(msg.createdAt)}
+                        </span>
+                      </div>
+
+                      <div
+                        className={`text-[15px] ${
+                          isUser ? "text-black" : "text-zinc-100"
+                        }`}
+                      >
+                        {renderPrettyMessage(msg.content)}
+                      </div>
+
+                      <div
+                        className={`pointer-events-none absolute inset-0 rounded-[1.6rem] border opacity-0 transition-opacity duration-300 group-hover:opacity-100 ${
+                          isUser ? "border-black/5" : "border-white/5"
+                        }`}
+                      />
+                    </div>
+                  </div>
+                );
+              })}
+
+              {isSending && (
+                <div className="flex w-full justify-start">
+                  <div className="max-w-[70%] rounded-[1.6rem] border border-zinc-700/70 bg-zinc-900 px-4 py-3 shadow-2xl shadow-black/20">
+                    <div className="flex items-center gap-2">
+                      <span className="h-2 w-2 animate-pulse rounded-full bg-emerald-400" />
+                      <span className="text-sm text-zinc-300">Thinking...</span>
+                    </div>
+                  </div>
                 </div>
-              ))}
+              )}
+
               <div ref={bottomRef} />
             </div>
 
@@ -483,13 +631,13 @@ export default function Home() {
                     }
                   }}
                   placeholder="Type your message..."
-                  className="flex-1 rounded-2xl border border-zinc-700 bg-black px-4 py-3 text-sm outline-none placeholder:text-zinc-500"
+                  className="flex-1 rounded-2xl border border-zinc-700 bg-zinc-950 px-4 py-3 text-sm outline-none placeholder:text-zinc-500 transition focus:border-zinc-500 focus:ring-2 focus:ring-white/10"
                 />
 
                 <button
                   onClick={handleSendMessage}
                   disabled={isSending}
-                  className="rounded-2xl bg-white px-5 py-3 text-sm font-semibold text-black disabled:cursor-not-allowed disabled:opacity-50"
+                  className="rounded-2xl bg-white px-5 py-3 text-sm font-semibold text-black transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   {isSending ? "Sending..." : "Send"}
                 </button>
